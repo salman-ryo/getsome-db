@@ -3,8 +3,9 @@ package db
 import (
 	"encoding/json" // Provides functions to work with JSON encoding and decoding
 	"errors"        // Standard package for error handling
-	"os"            // Provides functions to work with the operating system (e.g., checking if a file exists)
-	"sync"          // Provides concurrency control primitives, like mutexes
+	"fmt"
+	"os"   // Provides functions to work with the operating system (e.g., checking if a file exists)
+	"sync" // Provides concurrency control primitives, like mutexes
 )
 
 // Database struct defines the structure of the in-memory JSON database.
@@ -15,17 +16,17 @@ type Database struct {
 }
 
 // NewDatabase initializes the database and loads any existing data from a file.
-func NewDatabase(filePath string) (*Database, error) {
+func NewDatabase(databaseName string) (*Database, error) {
+	filePath := "storage/" + databaseName + ".json"
 	myDb := &Database{
 		data:     make(map[string]interface{}), // Initializes the in-memory data store as an empty map
 		filePath: filePath,                     // Sets the file path for persistence
 	}
 
-	// Attempt to load existing data from the file
 	if err := myDb.loadFromDisk(); err != nil { // Calls loadFromDisk and returns error if it fails
-		return nil, err
+		return nil, fmt.Errorf("error loading database %s: %w", databaseName, err)
 	}
-	return myDb, nil // Returns the initialized database instance if no error
+	return myDb, nil
 }
 
 // loadFromDisk reads JSON data from the file at filePath and populates the database.
@@ -66,11 +67,14 @@ func (db *Database) Create(key string, value interface{}) error {
 	defer db.mu.Unlock() // Unlocks after function completes
 
 	if _, exists := db.data[key]; exists { // Checks if key already exists
-		return errors.New("key already exists") // Returns error if key exists
+		return fmt.Errorf("Create error: key %s already exists", key) // Returns error if key exists
 	}
 
-	db.data[key] = value   // Adds new key-value pair to in-memory data
-	return db.saveToDisk() // Saves updated data to disk for persistence
+	db.data[key] = value
+	if err := db.saveToDisk(); err != nil {
+		return fmt.Errorf("Create error: %w", err)
+	}
+	return nil // Saves updated data to disk for persistence
 }
 
 // Read retrieves the value associated with a key.
@@ -80,7 +84,7 @@ func (db *Database) Read(key string) (interface{}, error) {
 
 	value, exists := db.data[key] // Looks up the value associated with the key
 	if !exists {                  // If the key doesn’t exist, return an error
-		return nil, errors.New("key not found")
+		return nil, errors.New("Read error: key not found")
 	}
 	return value, nil // Returns the value if key is found
 }
@@ -91,11 +95,14 @@ func (db *Database) Update(key string, value interface{}) error {
 	defer db.mu.Unlock() // Unlocks after function completes
 
 	if _, exists := db.data[key]; !exists { // Checks if key exists
-		return errors.New("key not found") // Returns error if key doesn't exist
+		return errors.New("Update error: key not found") // Returns error if key doesn't exist
 	}
 
-	db.data[key] = value   // Updates the value for the specified key
-	return db.saveToDisk() // Saves the updated data to disk
+	db.data[key] = value // Updates the value for the specified key
+	if err := db.saveToDisk(); err != nil {
+		return fmt.Errorf("Update error: %w", err)
+	}
+	return nil
 }
 
 // Delete removes a key-value pair from the database.
@@ -104,9 +111,12 @@ func (db *Database) Delete(key string) error {
 	defer db.mu.Unlock() // Unlocks after function completes
 
 	if _, exists := db.data[key]; !exists { // Checks if key exists in the data
-		return errors.New("key not found") // Returns error if key doesn't exist
+		return errors.New("Delete error: key not found") // Returns error if key doesn't exist
 	}
 
-	delete(db.data, key)   // Removes the key-value pair from the in-memory data store
-	return db.saveToDisk() // Saves the updated data to disk
+	delete(db.data, key) // Removes the key-value pair from the in-memory data store
+	if err := db.saveToDisk(); err != nil {
+		return fmt.Errorf("Delete error: %w", err)
+	}
+	return nil
 }
