@@ -19,19 +19,23 @@ const (
 
 // Start function to initialize and run the HTTP server
 func Start() error {
-	// Initialize the database
-	dbInstance, err := db.NewDatabase("storage/data.json")
-	if err != nil {
-		return fmt.Errorf("failed to initialize database: %w", err)
-	}
+
+	// Initialize the session manager
+	sessionManager := db.NewsessionManager()
+
+	// // Initialize the database
+	// dbInstance, err := db.NewDatabase("storage/data.json")
+	// if err != nil {
+	// 	return fmt.Errorf("failed to initialize database: %w", err)
+	// }
 
 	// Configure the HTTP server with the desired settings
 	myServer := &http.Server{
-		Addr:         port,                       // Port to listen on
-		Handler:      setUpDbRoutes(dbInstance),  // Function to set up the HTTP routes
-		ReadTimeout:  readTimeOut * time.Second,  // Read timeout to limit the maximum time for reading a request
-		WriteTimeout: writeTimeOut * time.Second, // Write timeout to limit the maximum time for writing a response
-		IdleTimeout:  idleTimeOut * time.Second,  // Idle timeout to close idle connections
+		Addr:         port,                          // Port to listen on
+		Handler:      setUpDbRoutes(sessionManager), // Function to set up the HTTP routes
+		ReadTimeout:  readTimeOut * time.Second,     // Read timeout to limit the maximum time for reading a request
+		WriteTimeout: writeTimeOut * time.Second,    // Write timeout to limit the maximum time for writing a response
+		IdleTimeout:  idleTimeOut * time.Second,     // Idle timeout to close idle connections
 	}
 
 	log.Printf("Server is running on port: %s", port)
@@ -41,20 +45,71 @@ func Start() error {
 }
 
 // setUpDbRoutes configures the HTTP routes for the database
-func setUpDbRoutes(dbInstance *db.Database) http.Handler {
+func setUpDbRoutes(sm *db.SessionManager) http.Handler {
 	// Create a new ServeMux (HTTP request multiplexer)
 	mux := http.NewServeMux()
 
 	// Define the health check route
 	mux.HandleFunc("/health", healthCheckHandler) // Health check endpoint
 
+	// session related
+	mux.HandleFunc("/db/create-session", func(w http.ResponseWriter, r *http.Request) {
+		createSessionHandler(w, r, sm)
+	})
+
 	// CRUD routes with closures to use dbInstance
-	mux.HandleFunc("/db/create", func(w http.ResponseWriter, r *http.Request) { createHandler(w, r, dbInstance) })
-	mux.HandleFunc("/db/read", func(w http.ResponseWriter, r *http.Request) { readHandler(w, r, dbInstance) })
-	mux.HandleFunc("/db/update", func(w http.ResponseWriter, r *http.Request) { updateHandler(w, r, dbInstance) })
-	mux.HandleFunc("/db/delete", func(w http.ResponseWriter, r *http.Request) { deleteHandler(w, r, dbInstance) })
+	mux.HandleFunc("/db/create", func(w http.ResponseWriter, r *http.Request) { sessionHandler(w, r, sm, createHandler) })
+	mux.HandleFunc("/db/read", func(w http.ResponseWriter, r *http.Request) { sessionHandler(w, r, sm, readHandler) })
+	mux.HandleFunc("/db/update", func(w http.ResponseWriter, r *http.Request) { sessionHandler(w, r, sm, updateHandler) })
+	mux.HandleFunc("/db/delete", func(w http.ResponseWriter, r *http.Request) { sessionHandler(w, r, sm, deleteHandler) })
 
 	return mux
+}
+
+// create session handler func will handle session logic
+func createSessionHandler(w http.ResponseWriter, r *http.Request, sm *db.SessionManager) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// we need db name to create a db session
+	var reqData struct {
+		DbName string `json:"db_name"`
+	}
+	//validate the json
+	if err := json.NewDecoder(r.Body).Decode(&reqData); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	}
+
+	// create session
+	_, err := sm.CreateSession(reqData.DbName)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create session: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// success
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Session created", "db_name": reqData.DbName})
+}
+
+// session Handler
+func sessionHandler(w http.ResponseWriter, r *http.Request, sm *db.SessionManager, handler func(http.ResponseWriter, *http.Request, *db.Database)) {
+	dbName := r.URL.Query().Get("db")
+	// validate name
+	if dbName == "" {
+		http.Error(w, "Database name (db) is required", http.StatusBadRequest)
+		return
+	}
+
+	session, err := sm.GetSession(dbName)
+	if err != nil {
+		http.Error(w, "Session not found: "+err.Error(), http.StatusNotFound)
+		return
+	}
+
+	handler(w, r, session.Database)
 }
 
 // healthCheck is the handler function for the "/health" route
